@@ -79,6 +79,13 @@ lookupObject (Repo repo) (OID oid) (ObjectType typ) = alloca $ \ptr -> do
 closeObject :: Object -> IO ()
 closeObject (Object obj) = c'git_object_close obj
 
+withObject :: Repo -> OID -> ObjectType -> (Object -> IO a) -> IO a
+withObject repo oid typ f = do
+  obj <- lookupObject repo oid typ
+  res <- f obj
+  closeObject obj
+  return res
+
 objectType :: Object -> ObjectType
 objectType (Object x) = unsafePerformIO $ ObjectType `fmap` c'git_object_type x
 
@@ -91,6 +98,5 @@ main = do
     print (oid2 == oid3)
     print oid2
     o1 <- lookupObject repo oid2 commitObject
-    print $ objectType o1
-    lookupObject repo oid2 treeObject
+    withObject repo oid2 commitObject $ \obj -> print (objectType obj)
 
