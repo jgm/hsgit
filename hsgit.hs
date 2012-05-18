@@ -76,6 +76,9 @@ lookupObject (Repo repo) (OID oid) (ObjectType typ) = alloca $ \ptr -> do
               " with OID " ++ show (OID oid)) rc
      else Object `fmap` peek ptr
 
+closeObject :: Object -> IO ()
+closeObject (Object obj) = c'git_object_close obj
+
 objectType :: Object -> ObjectType
 objectType (Object x) = unsafePerformIO $ ObjectType `fmap` c'git_object_type x
 
