@@ -27,6 +27,7 @@ instance Show ObjectType where
     c'git_object_type2string x >>= peekCString
 
 commitObject, treeObject :: ObjectType
+blobObject = ObjectType c'GIT_OBJ_BLOB
 commitObject = ObjectType c'GIT_OBJ_COMMIT
 treeObject = ObjectType c'GIT_OBJ_TREE
 
@@ -75,6 +76,9 @@ lookupObject (Repo repo) (OID oid) (ObjectType typ) = alloca $ \ptr -> do
               " with OID " ++ show (OID oid)) rc
      else Object `fmap` peek ptr
 
+objectType :: Object -> ObjectType
+objectType (Object x) = unsafePerformIO $ ObjectType `fmap` c'git_object_type x
+
 main = do
   withRepo "test.git" $ \repo -> do
     let oid1 = mkOID "10754a36c7e1e2b3cdf9d763a9e78ac35bcb56cc"
@@ -83,6 +87,7 @@ main = do
     print (oid1 == oid2)
     print (oid2 == oid3)
     print oid2
-    lookupObject repo oid2 commitObject
+    o1 <- lookupObject repo oid2 commitObject
+    print $ objectType o1
     lookupObject repo oid2 treeObject
 
