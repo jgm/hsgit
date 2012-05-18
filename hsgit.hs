@@ -50,6 +50,14 @@ openRepo fp = alloca $ \ptr -> do
      then raiseGitError ("Cannot open repository " ++ fp) rc
      else Repo `fmap` peek ptr
 
+initRepo :: Bool -> FilePath -> IO Repo
+initRepo bare fp = alloca $ \ptr -> do
+  fp' <- newCString fp
+  rc <- c'git_repository_init ptr fp' (if bare then 0 else 1)
+  if rc < 0
+     then raiseGitError ("Cannot initialize repository " ++ fp) rc
+     else Repo `fmap` peek ptr
+
 freeRepo :: Repo -> IO ()
 freeRepo (Repo repo) = c'git_repository_free repo
 
@@ -99,4 +107,5 @@ main = do
     print oid2
     o1 <- lookupObject repo oid2 commitObject
     withObject repo oid2 commitObject $ \obj -> print (objectType obj)
-
+    initRepo True "foo.git"
+    return ()
