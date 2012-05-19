@@ -1,5 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 import Control.Exception
+import Data.Time.Clock.POSIX
+import Data.Time.Clock
 import Foreign hiding (unsafePerformIO)
 import System.IO.Unsafe (unsafePerformIO)
 import Foreign.C.String
@@ -25,6 +27,19 @@ newtype ObjectType = ObjectType CInt deriving (Eq)
 instance Show ObjectType where
   show (ObjectType x) = unsafePerformIO $
     c'git_object_type2string x >>= peekCString
+
+data Commit = Commit { commitId           :: OID
+                     , commitMessage      :: String
+                     , commitMessageShort :: String
+                     , commitTime         :: POSIXTime
+                     , commitCommitter    :: Signature
+                     , commitAuthor       :: Signature
+                     }
+
+data Signature = Signature { signatureName   :: String
+                           , signatureEmail  :: String
+                           , signatureWhen   :: UTCTime
+                           }
 
 commitObject, treeObject :: ObjectType
 blobObject = ObjectType c'GIT_OBJ_BLOB
@@ -96,6 +111,20 @@ withObject repo oid typ f = do
 
 objectType :: Object -> ObjectType
 objectType (Object x) = unsafePerformIO $ ObjectType `fmap` c'git_object_type x
+
+toSignature :: C'git_signature -> IO Signature
+toSignature (C'git_signature name email (C'git_time time offset)) = do
+  name' <- peekCString name
+  email' <- peekCString email
+  let time' = posixSecondsToUTCTime $ realToFrac time -- what about offset?
+  return $ Signature{ signatureName = name'
+                    , signatureEmail = email'
+                    , signatureWhen = time' }
+
+getCommit :: Repo -> OID -> IO Commit
+getCommit repo oid = do
+  commitObj <- lookupObject repo oid commitObject
+  return undefined -- TODO
 
 main = do
   withRepo "test.git" $ \repo -> do
