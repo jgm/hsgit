@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 import Control.Exception
+import Data.Time
 import Data.Time.Clock.POSIX
-import Data.Time.Clock
 import Foreign hiding (unsafePerformIO)
 import System.IO.Unsafe (unsafePerformIO)
 import Foreign.C.String
@@ -31,15 +31,15 @@ instance Show ObjectType where
 data Commit = Commit { commitId           :: OID
                      , commitMessage      :: String
                      , commitMessageShort :: String
-                     , commitTime         :: POSIXTime
+                     , commitTime         :: UTCTime
                      , commitCommitter    :: Signature
                      , commitAuthor       :: Signature
-                     }
+                     } deriving Show
 
 data Signature = Signature { signatureName   :: String
                            , signatureEmail  :: String
                            , signatureWhen   :: UTCTime
-                           }
+                           } deriving Show
 
 commitObject, treeObject :: ObjectType
 blobObject = ObjectType c'GIT_OBJ_BLOB
@@ -99,6 +99,28 @@ lookupObject (Repo repo) (OID oid) (ObjectType typ) = alloca $ \ptr -> do
               " with OID " ++ show (OID oid)) rc
      else Object `fmap` peek ptr
 
+lookupCommit :: Repo -> OID -> IO Commit
+lookupCommit (Repo repo) (OID oid) = alloca $ \ptr -> do
+  rc <- c'git_commit_lookup ptr repo oid
+  if rc < 0
+     then raiseGitError ("Cannot find commit with OID " ++ show (OID oid)) rc
+     else do
+       commit <- peek ptr
+       id' <- c'git_commit_id commit
+       time <- (posixSecondsToUTCTime . realToFrac) `fmap`
+                  c'git_commit_time commit
+       short <- c'git_commit_message_short commit >>= peekCString
+       msg <- c'git_commit_message commit >>= peekCString
+       committer <- c'git_commit_committer commit >>= peek >>= toSignature
+       author <- c'git_commit_author commit >>= peek >>= toSignature
+       return Commit { commitId           = OID id'
+                     , commitMessage      = msg
+                     , commitMessageShort = short
+                     , commitTime         = time
+                     , commitCommitter    = committer
+                     , commitAuthor       = author
+                     }
+
 closeObject :: Object -> IO ()
 closeObject (Object obj) = c'git_object_close obj
 
@@ -113,18 +135,14 @@ objectType :: Object -> ObjectType
 objectType (Object x) = unsafePerformIO $ ObjectType `fmap` c'git_object_type x
 
 toSignature :: C'git_signature -> IO Signature
-toSignature (C'git_signature name email (C'git_time time offset)) = do
+toSignature (C'git_signature name email (C'git_time time _offset)) = do
   name' <- peekCString name
   email' <- peekCString email
-  let time' = posixSecondsToUTCTime $ realToFrac time -- what about offset?
-  return $ Signature{ signatureName = name'
+  let time' = posixSecondsToUTCTime $ realToFrac time
+  return   Signature{ signatureName = name'
                     , signatureEmail = email'
                     , signatureWhen = time' }
 
-getCommit :: Repo -> OID -> IO Commit
-getCommit repo oid = do
-  commitObj <- lookupObject repo oid commitObject
-  return undefined -- TODO
 
 main = do
   withRepo "test.git" $ \repo -> do
@@ -135,6 +153,8 @@ main = do
     print (oid2 == oid3)
     print oid2
     o1 <- lookupObject repo oid2 commitObject
+    o2 <- lookupCommit repo oid2
+    print o2
     withObject repo oid2 commitObject $ \obj -> print (objectType obj)
     initRepo True "foo.git"
     return ()
