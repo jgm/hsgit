@@ -34,6 +34,7 @@ data Commit = Commit { commitId           :: OID
                      , commitTime         :: UTCTime
                      , commitCommitter    :: Signature
                      , commitAuthor       :: Signature
+                     , commitParents      :: [Commit]
                      } deriving Show
 
 data Signature = Signature { signatureName   :: String
@@ -104,8 +105,10 @@ lookupCommit (Repo repo) (OID oid) = alloca $ \ptr -> do
   rc <- c'git_commit_lookup ptr repo oid
   if rc < 0
      then raiseGitError ("Cannot find commit with OID " ++ show (OID oid)) rc
-     else do
-       commit <- peek ptr
+     else peek ptr >>= toCommit
+
+toCommit :: Ptr (C'git_commit) -> IO Commit
+toCommit commit = do
        id' <- c'git_commit_id commit
        time <- (posixSecondsToUTCTime . realToFrac) `fmap`
                   c'git_commit_time commit
@@ -113,12 +116,21 @@ lookupCommit (Repo repo) (OID oid) = alloca $ \ptr -> do
        msg <- c'git_commit_message commit >>= peekCString
        committer <- c'git_commit_committer commit >>= peek >>= toSignature
        author <- c'git_commit_author commit >>= peek >>= toSignature
+       numparents <- c'git_commit_parentcount commit
+       let getParent n = alloca $ \par -> do
+             rc <- c'git_commit_parent par commit n
+             if rc < 0
+                then raiseGitError ("Cannot get parent " ++ show n ++
+                        " of commit " ++ show (OID id')) rc
+                else peek par >>= toCommit
+       parents <- mapM getParent (take (fromIntegral numparents) [0..])
        return Commit { commitId           = OID id'
                      , commitMessage      = msg
                      , commitMessageShort = short
                      , commitTime         = time
                      , commitCommitter    = committer
                      , commitAuthor       = author
+                     , commitParents      = parents
                      }
 
 closeObject :: Object -> IO ()
@@ -147,7 +159,7 @@ toSignature (C'git_signature name email (C'git_time time _offset)) = do
 main = do
   withRepo "test.git" $ \repo -> do
     let oid1 = mkOID "10754a36c7e1e2b3cdf9d763a9e78ac35bcb56cc"
-    let oid2 = mkOID "10754a36c7e1e2b3cdf9d763a9e78ac35bcb56cc"
+    let oid2 = mkOID "49d40209afd138a37215915e51bed9e8079ba2fc"
     let oid3 = mkOID "90754a36c7e1e2b3cdf9d763a9e78ac35bcb56cc"
     print (oid1 == oid2)
     print (oid2 == oid3)
