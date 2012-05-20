@@ -35,12 +35,22 @@ data Commit = Commit { commitId           :: OID
                      , commitCommitter    :: Signature
                      , commitAuthor       :: Signature
                      , commitParents      :: [Commit]
+                     , commitTree         :: Tree
                      } deriving Show
 
 data Signature = Signature { signatureName   :: String
                            , signatureEmail  :: String
                            , signatureWhen   :: UTCTime
                            } deriving Show
+
+data Tree = Tree { treeId              :: OID
+                 , treeEntries         :: [Entry]
+                 } deriving Show
+
+data Entry = Entry { entryId         :: OID
+                   , entryAttributes :: CUInt
+                   , entryName       :: FilePath
+                   } deriving Show
 
 commitObject, treeObject :: ObjectType
 blobObject = ObjectType c'GIT_OBJ_BLOB
@@ -124,14 +134,21 @@ toCommit commit = do
                         " of commit " ++ show (OID id')) rc
                 else peek par >>= toCommit
        parents <- mapM getParent (take (fromIntegral numparents) [0..])
-       return Commit { commitId           = OID id'
-                     , commitMessage      = msg
-                     , commitMessageShort = short
-                     , commitTime         = time
-                     , commitCommitter    = committer
-                     , commitAuthor       = author
-                     , commitParents      = parents
-                     }
+       alloca $ \treePtr -> do
+         rc' <- c'git_commit_tree treePtr commit
+         tree <- if rc' < 0
+                    then raiseGitError ("Cannot get tree from commit " ++
+                                show (OID id')) rc'
+                    else peek treePtr >>= toTree
+         return Commit { commitId           = OID id'
+                       , commitMessage      = msg
+                       , commitMessageShort = short
+                       , commitTime         = time
+                       , commitCommitter    = committer
+                       , commitAuthor       = author
+                       , commitParents      = parents
+                       , commitTree         = tree
+                       }
 
 closeObject :: Object -> IO ()
 closeObject (Object obj) = c'git_object_close obj
@@ -156,6 +173,37 @@ toSignature (C'git_signature name email (C'git_time time _offset)) = do
                     , signatureWhen = time' }
 
 
+{-
+makeTree :: Repo -> IO Tree
+makeTree (Repo repo) = alloca $ \ptr -> do
+  rc <- c'git_tree_new ptr repo
+  if rc < 0
+     then raiseGitError "Cannot make tree" rc
+     else peek ptr >>= toTree
+-}
+
+
+
+toTree :: Ptr (C'git_tree) -> IO Tree
+toTree ptr = do
+  id' <- c'git_tree_id ptr
+  entrycount <- fromIntegral `fmap` c'git_tree_entrycount ptr
+  entries <- mapM (getEntry ptr) (take entrycount [0..])
+  return Tree { treeId              = OID id'
+              , treeEntries         = entries
+              }
+
+getEntry :: Ptr (C'git_tree) -> CInt -> IO Entry
+getEntry ptr idx = do
+  entry <- c'git_tree_entry_byindex ptr idx
+  id' <- c'git_tree_entry_id entry
+  attr <- c'git_tree_entry_attributes entry
+  name <- c'git_tree_entry_name entry >>= peekCString
+  return Entry{ entryId         = OID id'
+              , entryAttributes = attr
+              , entryName       = name
+              }
+
 main = do
   withRepo "test.git" $ \repo -> do
     let oid1 = mkOID "10754a36c7e1e2b3cdf9d763a9e78ac35bcb56cc"
@@ -167,6 +215,6 @@ main = do
     o1 <- lookupObject repo oid2 commitObject
     o2 <- lookupCommit repo oid2
     print o2
-    withObject repo oid2 commitObject $ \obj -> print (objectType obj)
-    initRepo True "foo.git"
+    -- withObject repo oid2 commitObject $ \obj -> print (objectType obj)
+    -- initRepo True "foo.git"
     return ()
