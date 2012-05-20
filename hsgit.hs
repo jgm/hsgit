@@ -8,6 +8,7 @@ import Foreign.C.String
 import Foreign.C.Types
 import Bindings.Libgit2
 import Data.Typeable
+import qualified Data.ByteString as B
 
 data GitError = GitError String String
                deriving (Show,Typeable)
@@ -47,10 +48,13 @@ data Tree = Tree { treeId              :: OID
                  , treeEntries         :: [Entry]
                  } deriving Show
 
-data Entry = Entry { entryId         :: OID
-                   , entryAttributes :: CUInt
-                   , entryName       :: FilePath
-                   } deriving Show
+newtype Entry = Entry (Ptr C'git_tree_entry)
+
+instance Show Entry where
+  show (Entry e) = unsafePerformIO $ do
+    name <- c'git_tree_entry_name e >>= peekCString
+    id' <- c'git_tree_entry_id e
+    return $ "Entry " ++ show (OID id') ++ " " ++ name
 
 commitObject, treeObject :: ObjectType
 blobObject = ObjectType c'GIT_OBJ_BLOB
@@ -194,15 +198,26 @@ toTree ptr = do
               }
 
 getEntry :: Ptr (C'git_tree) -> CInt -> IO Entry
-getEntry ptr idx = do
-  entry <- c'git_tree_entry_byindex ptr idx
-  id' <- c'git_tree_entry_id entry
-  attr <- c'git_tree_entry_attributes entry
-  name <- c'git_tree_entry_name entry >>= peekCString
-  return Entry{ entryId         = OID id'
-              , entryAttributes = attr
-              , entryName       = name
-              }
+getEntry ptr idx = Entry `fmap` c'git_tree_entry_byindex ptr idx
+
+getEntryContents :: Repo -> Entry -> IO B.ByteString
+getEntryContents (Repo repo) (Entry entry) = alloca $ \ptr -> do
+  rc <- c'git_tree_entry_2object ptr entry
+  if rc < 0
+     then raiseGitError ("Cannot get entry " ++ show (Entry entry)) rc
+     else do
+       obj <- peek ptr
+       id' <- c'git_object_id obj
+       alloca $ \blobPtr -> do
+         rc' <- c'git_blob_lookup blobPtr repo id'
+         if rc' < 0
+            then raiseGitError ("Cannot get blob " ++ show (OID id')) rc
+            else do
+              blob <- peek blobPtr
+              size <- fromIntegral `fmap` c'git_blob_rawsize blob
+              word8ptr <- c'git_blob_rawcontent blob
+              word8s <- mapM (peekElemOff word8ptr) (take size [0..])
+              return $ B.pack word8s
 
 main = do
   withRepo "test.git" $ \repo -> do
@@ -214,7 +229,9 @@ main = do
     print oid2
     o1 <- lookupObject repo oid2 commitObject
     o2 <- lookupCommit repo oid2
-    print o2
+    o3 <- lookupCommit repo (mkOID "85a248b60e1be5c96f803df7abf314662319abcd")
+    print o3
+    mapM_ (\e -> getEntryContents repo e >>= B.putStr) $ treeEntries (commitTree o3)
     -- withObject repo oid2 commitObject $ \obj -> print (objectType obj)
     -- initRepo True "foo.git"
     return ()
